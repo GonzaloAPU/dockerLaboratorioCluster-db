@@ -1,0 +1,26 @@
+name: Validar laboratorio
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  configuration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validar Compose con valores de ejemplo
+        run: docker compose --env-file .env.example config --quiet
+      - name: Validar Prometheus
+        run: docker run --rm --entrypoint promtool -v "$PWD/monitoring:/etc/prometheus:ro" prom/prometheus:v3.5.0 check config /etc/prometheus/prometheus.yml
+      - name: Validar HAProxy con nombres de nodos de prueba
+        run: >-
+          docker run --rm
+          --add-host db-node1:127.0.0.1
+          --add-host db-node2:127.0.0.1
+          --add-host db-node3:127.0.0.1
+          -v "$PWD/config/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro"
+          haproxy:3.2-alpine haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
+      - name: Construir imagen de PostgreSQL y Patroni
+        run: docker compose --env-file .env.example build db-node1

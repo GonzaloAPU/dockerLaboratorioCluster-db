@@ -1,0 +1,302 @@
+services:
+
+  grafana:
+    image: grafana/grafana:12.1.1
+    container_name: grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Define GRAFANA_ADMIN_PASSWORD en .env}
+    volumes:
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - cluster_net
+
+  postgres-exporter-node1:
+    image: prometheuscommunity/postgres-exporter:v0.17.1
+    container_name: postgres-exporter-node1
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${MONITOR_USER}:${MONITOR_PASS}@db-node1:5432/postgres?sslmode=disable"
+    depends_on:
+      - db-node1
+    networks:
+      - cluster_net
+
+  postgres-exporter-node2:
+    image: prometheuscommunity/postgres-exporter:v0.17.1
+    container_name: postgres-exporter-node2
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${MONITOR_USER}:${MONITOR_PASS}@db-node2:5432/postgres?sslmode=disable"
+    depends_on:
+      - db-node2
+    networks:
+      - cluster_net
+
+  postgres-exporter-node3:
+    image: prometheuscommunity/postgres-exporter:v0.17.1
+    container_name: postgres-exporter-node3
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${MONITOR_USER}:${MONITOR_PASS}@db-node3:5432/postgres?sslmode=disable"
+    depends_on:
+      - db-node3
+    networks:
+      - cluster_net
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - postgres-exporter-node1
+      - postgres-exporter-node2
+      - postgres-exporter-node3
+    networks:
+      - cluster_net
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.52.1
+    container_name: cadvisor
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks:
+      - cluster_net
+
+  haproxy:
+    image: haproxy:3.2-alpine
+    container_name: haproxy
+
+    volumes:
+      - ./config/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+
+    ports:
+      - "127.0.0.1:5000:5000"
+      - "127.0.0.1:5001:5001"
+      - "127.0.0.1:7000:7000"
+
+    depends_on:
+      - db-node1
+      - db-node2
+      - db-node3
+
+    networks:
+      - cluster_net
+
+
+  client:
+    image: postgres:17-bookworm
+    container_name: cluster-client
+
+    command: sleep infinity
+
+    environment:
+      PGPASSWORD: ${POSTGRES_SUPERPASS}
+      ADMIN_PASS: ${ADMIN_PASS}
+      APP_PASS: ${APP_PASS}
+      MONITOR_PASS: ${MONITOR_PASS}
+
+    volumes:
+      - ./scripts:/scripts:ro
+
+    depends_on:
+      - haproxy
+
+    networks:
+      - cluster_net
+
+
+  etcd1:
+    image: gcr.io/etcd-development/etcd:v3.5.31
+    container_name: etcd1
+
+    command:
+      - /usr/local/bin/etcd
+      - --name=etcd1
+      - --data-dir=/etcd-data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://etcd1:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd1:2380
+      - --initial-cluster=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      - --initial-cluster-token=clusterdb-etcd
+      - --initial-cluster-state=new
+
+    volumes:
+      - etcd1_data:/etcd-data
+
+    networks:
+      - cluster_net
+
+
+  etcd2:
+    image: gcr.io/etcd-development/etcd:v3.5.31
+    container_name: etcd2
+
+    command:
+      - /usr/local/bin/etcd
+      - --name=etcd2
+      - --data-dir=/etcd-data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://etcd2:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd2:2380
+      - --initial-cluster=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      - --initial-cluster-token=clusterdb-etcd
+      - --initial-cluster-state=new
+
+    volumes:
+      - etcd2_data:/etcd-data
+
+    networks:
+      - cluster_net
+
+
+  etcd3:
+    image: gcr.io/etcd-development/etcd:v3.5.31
+    container_name: etcd3
+
+    command:
+      - /usr/local/bin/etcd
+      - --name=etcd3
+      - --data-dir=/etcd-data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://etcd3:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd3:2380
+      - --initial-cluster=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      - --initial-cluster-token=clusterdb-etcd
+      - --initial-cluster-state=new
+
+    volumes:
+      - etcd3_data:/etcd-data
+
+    networks:
+      - cluster_net
+
+
+  db-node1:
+    build:
+      context: ./config/patroni
+
+    container_name: db-node1
+
+    environment:
+      PATRONI_NAME: db-node1
+      PATRONI_SCOPE: clusterdb
+
+      PATRONI_ETCD3_HOSTS: etcd1:2379,etcd2:2379,etcd3:2379
+
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: db-node1:5432
+      PATRONI_RESTAPI_CONNECT_ADDRESS: db-node1:8008
+
+      PATRONI_SUPERUSER_USERNAME: ${POSTGRES_SUPERUSER}
+      PATRONI_SUPERUSER_PASSWORD: ${POSTGRES_SUPERPASS}
+
+      PATRONI_REPLICATION_USERNAME: ${REPLICATION_USER}
+      PATRONI_REPLICATION_PASSWORD: ${REPLICATION_PASS}
+
+    volumes:
+      - pg1_data:/var/lib/postgresql/data
+
+    depends_on:
+      - etcd1
+      - etcd2
+      - etcd3
+
+    networks:
+      - cluster_net
+
+
+  db-node2:
+    build:
+      context: ./config/patroni
+
+    container_name: db-node2
+
+    environment:
+      PATRONI_NAME: db-node2
+      PATRONI_SCOPE: clusterdb
+
+      PATRONI_ETCD3_HOSTS: etcd1:2379,etcd2:2379,etcd3:2379
+
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: db-node2:5432
+      PATRONI_RESTAPI_CONNECT_ADDRESS: db-node2:8008
+
+      PATRONI_SUPERUSER_USERNAME: ${POSTGRES_SUPERUSER}
+      PATRONI_SUPERUSER_PASSWORD: ${POSTGRES_SUPERPASS}
+
+      PATRONI_REPLICATION_USERNAME: ${REPLICATION_USER}
+      PATRONI_REPLICATION_PASSWORD: ${REPLICATION_PASS}
+
+    volumes:
+      - pg2_data:/var/lib/postgresql/data
+
+    depends_on:
+      - etcd1
+      - etcd2
+      - etcd3
+
+    networks:
+      - cluster_net
+
+
+  db-node3:
+    build:
+      context: ./config/patroni
+
+    container_name: db-node3
+
+    environment:
+      PATRONI_NAME: db-node3
+      PATRONI_SCOPE: clusterdb
+
+      PATRONI_ETCD3_HOSTS: etcd1:2379,etcd2:2379,etcd3:2379
+
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: db-node3:5432
+      PATRONI_RESTAPI_CONNECT_ADDRESS: db-node3:8008
+
+      PATRONI_SUPERUSER_USERNAME: ${POSTGRES_SUPERUSER}
+      PATRONI_SUPERUSER_PASSWORD: ${POSTGRES_SUPERPASS}
+
+      PATRONI_REPLICATION_USERNAME: ${REPLICATION_USER}
+      PATRONI_REPLICATION_PASSWORD: ${REPLICATION_PASS}
+
+    volumes:
+      - pg3_data:/var/lib/postgresql/data
+
+    depends_on:
+      - etcd1
+      - etcd2
+      - etcd3
+
+    networks:
+      - cluster_net
+
+
+networks:
+  cluster_net:
+    driver: bridge
+
+
+volumes:
+  etcd1_data:
+  etcd2_data:
+  etcd3_data:
+
+  pg1_data:
+  pg2_data:
+  pg3_data:
+  prometheus_data:
+  grafana_data:

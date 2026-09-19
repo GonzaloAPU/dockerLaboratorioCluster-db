@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+backups/
+node1/
+node2/
+node3/
+*.dump
+*.backup
+*.log
+.validation/
